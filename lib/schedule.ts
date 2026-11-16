@@ -45,8 +45,40 @@ export function formatDate(time: number, timezone: string) {
   return DateTime.fromMillis(time, { zone: timezone }).setLocale("en-GB").toFormat("d LLL yyyy");
 }
 
+export function formatTimeSpan(from: number, to: number, timezone: string) {
+  const start = DateTime.fromMillis(from, { zone: timezone });
+  const end = DateTime.fromMillis(to, { zone: timezone });
+  const time = start.offset === end.offset ? "HH:mm" : "HH:mm ZZZZ";
+  return start.hasSame(end, "day")
+    ? `${start.toFormat(time)}–${end.toFormat(time)}`
+    : `${start.toFormat(`d LLL ${time}`)} – ${end.toFormat(`d LLL ${time}`)}`;
+}
+
+export function explainConflict(conflict: Conflict, workspace: Workspace) {
+  const names = new Map(workspace.services.map((service) => [service.id, service.name]));
+  return {
+    headline: `${conflict.target.job.name} ${conflict.conditional ? "may lose" : "is expected to lose"} ${conflict.impacts.map((item) => names.get(item.serviceId)).join(", ")}`,
+    paths: conflict.impacts.map((item) => [conflict.source.job.name, ...item.path.map((id) => names.get(id))].join(" → ")),
+  };
+}
+
 export function jobPadding(job: Job, defaultPadding = 0) {
   return job.padding ?? defaultPadding;
+}
+
+export function groupOverlappingRuns(runs: Occurrence[]): Occurrence[][] {
+  const groups: Occurrence[][] = [];
+  let end = -Infinity;
+  for (const run of [...runs].sort((a, b) => a.start - b.start)) {
+    if (run.start >= end) {
+      groups.push([run]);
+      end = run.end;
+    } else {
+      groups.at(-1)!.push(run);
+      end = Math.max(end, run.end);
+    }
+  }
+  return groups;
 }
 
 function makeOccurrence(job: Job, start: number, defaultPadding: number): Occurrence {

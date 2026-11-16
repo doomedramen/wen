@@ -1,8 +1,6 @@
 services:
   wen:
-    image: ${WEN_IMAGE:-wen:local}
-    build:
-      context: .
+    image: ${WEN_IMAGE:-ghcr.io/doomedramen/wen:latest}
     restart: unless-stopped
     ports:
       - "${WEN_PORT:-3000}:3000"

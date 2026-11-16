@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowRight, ChevronRight, CircleCheck, Cloud, GitBranch, HardDrive, Network, Pencil, Plus, Server, Terminal, Zap } from "lucide-react";
+import { ArrowRight, ChevronRight, CircleCheck, Cloud, Database, GitBranch, HardDrive, Network, Pencil, Plus, Server, Terminal, Zap, type LucideIcon } from "lucide-react";
 import { dependencyPaths } from "../lib/graph";
 import type { Job, Service, Workspace } from "../lib/model";
 import { formatDate, formatTime, jobPadding, previousRuns, projectImpacts } from "../lib/schedule";
@@ -32,7 +32,13 @@ export function Jobs({ workspace, open }: { workspace: Workspace; open: OpenEdit
   );
 }
 
-const serviceIcons = { Network, Storage: HardDrive, Compute: Server, Power: Zap, Service: Cloud };
+const serviceIcons = new Map<string, LucideIcon>([
+  ["network", Network],
+  ["storage", HardDrive],
+  ["compute", Server],
+  ["power", Zap],
+  ["database", Database],
+]);
 
 export function Services({ workspace, open }: { workspace: Workspace; open: OpenEditor }) {
   const [selected, select] = useState("");
@@ -45,7 +51,7 @@ export function Services({ workspace, open }: { workspace: Workspace; open: Open
         <div className="services-layout">
           <section className="panel collection" aria-label="Services inventory">
             {workspace.services.map((service) => {
-              const Icon = serviceIcons[service.kind];
+              const Icon = serviceIcons.get(service.kind.toLowerCase()) ?? Cloud;
               return <button className="collection-row service-row" aria-pressed={service.id === current.id} key={service.id} onClick={() => select(service.id)}>
                 <span className="item-icon"><Icon size={18} /></span>
                 <span className="collection-name"><strong>{service.name}</strong><span>{service.kind}</span></span>

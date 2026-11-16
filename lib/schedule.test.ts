@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { minute, type Workspace } from "./model";
-import { occurrencesFor, parseCron, projectWindow, timeWindow, validOccurrenceStart } from "./schedule";
+import { groupOverlappingRuns, occurrencesFor, parseCron, projectWindow, timeWindow, validOccurrenceStart } from "./schedule";
 
 const timezone = "Europe/London";
 const evening = timeWindow("2026-11-16", "21", timezone);
@@ -70,6 +70,19 @@ test("day views include buffered runs carried over from the previous day", () =>
   assert.equal(carried.start, midnight - 60 * minute);
   assert.equal(carried.scheduledEnd, midnight - 10 * minute);
   assert.equal(carried.end, midnight + 20 * minute);
+});
+
+test("vertical groups join buffered overlaps across midnight and separate touching runs", () => {
+  const workspace = exampleWorkspace();
+  workspace.padding = 15;
+  workspace.jobs[0].duration = 30;
+  workspace.jobs.push({ id: "sync", name: "Backup sync", cron: "10 1 * * *", duration: 20, requires: [], impacts: [], enabled: true });
+  const { byJob } = projectWindow(workspace, evening);
+  const groups = groupOverlappingRuns([...byJob.values()].flat().reverse());
+  assert.deepEqual(groups.map((group) => group.map((run) => run.job.id)), [
+    ["snapshot"],
+    ["unifi", "patch", "sync"],
+  ]);
 });
 
 test("paused jobs have no occurrences and a run log must match its cron start", () => {

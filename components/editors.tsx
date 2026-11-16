@@ -4,8 +4,8 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { AlertCircle, ArrowRight, Check, Clock3, Trash2, X } from "lucide-react";
 import { DateTime, IANAZone } from "luxon";
 import { dependencyPaths } from "../lib/graph";
-import { maxDuration, outcomes, serviceTypes, type ImpactKind, type Job, type Mutation, type RunLog, type Service, type Workspace } from "../lib/model";
-import { formatDate, formatTime, parseCron, projectImpacts, type Occurrence } from "../lib/schedule";
+import { maxDuration, maxServiceTypeLength, outcomes, suggestedServiceTypes, type ImpactKind, type Job, type Mutation, type RunLog, type Service, type Workspace } from "../lib/model";
+import { explainConflict, formatDate, formatTime, formatTimeSpan, parseCron, projectImpacts, type Conflict, type Occurrence } from "../lib/schedule";
 
 export type Editor =
   | { kind: "job"; job?: Job }
@@ -203,6 +203,7 @@ function ServiceForm({ service, workspace, send, close }: { service?: Service; w
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const excluded = new Set(service ? dependencyPaths(workspace.services, service.id, "downstream").keys() : []);
+  const types = [...new Set([...suggestedServiceTypes, ...workspace.services.map((item) => item.kind)])].sort();
 
   async function attempt(mutation: Mutation) {
     setError("");
@@ -221,7 +222,7 @@ function ServiceForm({ service, workspace, send, close }: { service?: Service; w
     void attempt({
       action: "save-service",
       id: service?.id,
-      value: { name: String(form.get("name")), kind: form.get("kind") as Service["kind"], dependsOn: parents },
+      value: { name: String(form.get("name")), kind: String(form.get("kind")), dependsOn: parents },
     });
   }
 
@@ -229,7 +230,12 @@ function ServiceForm({ service, workspace, send, close }: { service?: Service; w
     <form onSubmit={submit}>
       <div className="dialog-body">
         <label className="field">Service name<input name="name" required maxLength={100} defaultValue={service?.name} placeholder="e.g. Internet access" autoFocus /></label>
-        <label className="field">Type<select name="kind" defaultValue={service?.kind ?? "Service"}>{serviceTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
+        <label className="field">
+          <span id="service-type-label">Type</span>
+          <input name="kind" list="service-types" defaultValue={service?.kind} maxLength={maxServiceTypeLength} placeholder="Service" aria-labelledby="service-type-label" aria-describedby="service-type-help" />
+          <datalist id="service-types">{types.map((type) => <option key={type} value={type} />)}</datalist>
+          <span className="field-hint" id="service-type-help">Choose a suggestion, enter your own type, or leave it blank to use Service.</span>
+        </label>
         <fieldset>
           <legend>Depends on</legend>
           <p className="field-hint">If any selected service goes offline, this service is also affected.</p>
@@ -344,7 +350,7 @@ export function WorkspaceEditor({ editor, workspace, send, close }: { editor: Ed
 }
 
 export function OccurrenceDetails({ run, workspace, now, conflicts, close, onEdit, onLog }: {
-  run: Occurrence; workspace: Workspace; now: number; conflicts: string[]; close: () => void; onEdit: () => void; onLog: () => void;
+  run: Occurrence; workspace: Workspace; now: number; conflicts: Conflict[]; close: () => void; onEdit: () => void; onLog: () => void;
 }) {
   const impact = projectImpacts(run.job, workspace.services);
   const logged = workspace.logs.find((entry) => entry.jobId === run.job.id && entry.start === run.start);
@@ -360,7 +366,19 @@ export function OccurrenceDetails({ run, workspace, now, conflicts, close, onEdi
         </div>
         {!!run.job.requires.length && <div className="detail-section"><h3>Requires</h3><p>{run.job.requires.map((id) => names.get(id)).join(", ")}</p></div>}
         {!!impact.length && <div className="detail-section"><h3>Projected impact</h3>{impact.map((item) => <p key={item.serviceId}>{item.path.map((id) => names.get(id)).join(" → ")} <span className="pill">{item.kind}</span></p>)}</div>}
-        {!!conflicts.length && <div className="detail-section danger-text"><h3>Dependency conflicts</h3>{conflicts.map((item) => <p key={item}>{item}</p>)}</div>}
+        {!!conflicts.length && (
+          <div className="detail-section"><h3>Dependency conflicts</h3>
+            {conflicts.map((conflict) => {
+              const { headline, paths } = explainConflict(conflict, workspace);
+              return <div className="detail-conflict" key={`${conflict.source.job.id}:${conflict.source.start}`}>
+                <strong>{headline}</strong>
+                <p className="mono">{formatTimeSpan(conflict.from, conflict.to, workspace.timezone)}</p>
+                {paths.map((path) => <p key={path}>{path}</p>)}
+                {conflict.paddingOnly && <p>Overlap only within an overrun buffer</p>}
+              </div>;
+            })}
+          </div>
+        )}
         {logged && <div className="detail-section"><h3>Logged outcome</h3><p><Check size={14} /> {logged.outcome}</p>{logged.note && <p className="preserve-lines">{logged.note}</p>}</div>}
       </div>
       <div className="dialog-actions"><button className="button" onClick={onEdit}>Edit job <ArrowRight size={15} /></button><div className="action-spacer" />{run.start <= now && <button className="button primary" onClick={onLog}>{logged ? "Edit run log" : "Log run"}</button>}</div>

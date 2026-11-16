@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CalendarDays, Check, Clock3, Globe, Layers, Monitor, Moon, Plus, Server, Settings2, Sun, Terminal } from "lucide-react";
 import type { Mutation, Workspace } from "../lib/model";
-import type { Occurrence } from "../lib/schedule";
+import type { Conflict, Occurrence } from "../lib/schedule";
 import { OccurrenceDetails, WorkspaceEditor, type Editor } from "./editors";
 import { Timeline } from "./timeline";
 import { Jobs, RunLogView, Services } from "./workspace-views";
@@ -68,7 +68,7 @@ export function Dashboard({ initialWorkspace, initialNow }: { initialWorkspace: 
   const [theme, setTheme] = useState<Theme>("system");
   const [now, setNow] = useState(initialNow);
   const [editor, setEditor] = useState<Editor>();
-  const [details, setDetails] = useState<{ run: Occurrence; conflicts: string[] }>();
+  const [details, setDetails] = useState<{ run: Occurrence; conflicts: Conflict[] }>();
 
   useEffect(() => {
     const readHash = () => {

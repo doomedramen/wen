@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState, type MouseEvent, type FocusEvent } from "react";
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, CalendarDays, CircleCheck, Clock3, Layers, Radio, Timer } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, CalendarDays, ChevronRight, CircleCheck, Clock3, Layers, Radio, Timer } from "lucide-react";
 import { DateTime } from "luxon";
 import { minute, type Workspace } from "../lib/model";
-import { formatDate, formatTime, localDate, nextOccurrence, occurrencesFor, projectWindow, timeWindow, type Conflict, type Occurrence, type Window } from "../lib/schedule";
+import { explainConflict, formatDate, formatTime, formatTimeSpan, groupOverlappingRuns, localDate, nextOccurrence, occurrencesFor, projectWindow, timeWindow, type Conflict, type Occurrence, type ProjectedImpact, type Window } from "../lib/schedule";
 
 const ranges = [
   ["21", "Evening · 21:00–03:00"],
@@ -29,22 +29,125 @@ function tooltipTime(run: Occurrence, timezone: string) {
   return `${start.toFormat("d LLL, HH:mm ZZZZ")} – ${end.toFormat(start.hasSame(end, "day") ? "HH:mm ZZZZ" : "d LLL, HH:mm ZZZZ")}`;
 }
 
-export function explainConflict(conflict: Conflict, workspace: Workspace) {
-  const names = new Map(workspace.services.map((service) => [service.id, service.name]));
-  return {
-    headline: `${conflict.target.job.name} ${conflict.conditional ? "may lose" : "is expected to lose"} ${conflict.impacts.map((item) => names.get(item.serviceId)).join(", ")}`,
-    paths: conflict.impacts.map((item) => [conflict.source.job.name, ...item.path.map((id) => names.get(id))].join(" → ")),
-  };
+const runLabels = {
+  scheduled: "Scheduled",
+  planned: "Planned outage",
+  conditional: "Conditional impact",
+  conflict: "Dependency conflict",
+};
+
+function runState(impacts: ProjectedImpact[], conflicts?: Conflict[]) {
+  if (conflicts?.length) return "conflict";
+  if (impacts.some((impact) => impact.kind === "planned")) return "planned";
+  return impacts.length ? "conditional" : "scheduled";
 }
 
-function TimelineChart({ workspace, window, now, projection, onRun }: {
+type TimelineRunsProps = {
   workspace: Workspace;
   window: Window;
   now: number;
   projection: ReturnType<typeof projectWindow>;
-  onRun: (run: Occurrence, conflicts: string[]) => void;
+  onRun: (run: Occurrence, conflicts: Conflict[]) => void;
+};
+
+type RunConflicts = Map<string, Conflict[]>;
+
+function TimelineRuns(props: TimelineRunsProps) {
+  const { workspace, projection } = props;
+  const groups = useMemo(() => groupOverlappingRuns([...projection.byJob.values()].flat()), [projection]);
+  const targetConflicts = useMemo(() => {
+    const byRun: RunConflicts = new Map();
+    for (const conflict of projection.conflicts) {
+      const key = runKey(conflict.target);
+      const matching = byRun.get(key) ?? [];
+      matching.push(conflict);
+      byRun.set(key, matching);
+    }
+    return byRun;
+  }, [projection]);
+
+  if (!groups.length) {
+    const hasJobs = workspace.jobs.length > 0;
+    return <div className="empty"><CalendarDays size={22} /><strong>{hasJobs ? "No runs in this window" : "No jobs yet"}</strong><span>{hasJobs ? "Pick a different date or time range to see more of your schedule." : "Use New job to add your first scheduled run."}</span></div>;
+  }
+
+  return (
+    <>
+      <TimelineChart {...props} targetConflicts={targetConflicts} />
+      <VerticalTimeline {...props} groups={groups} targetConflicts={targetConflicts} />
+    </>
+  );
+}
+
+function VerticalTimeline({ workspace, window, now, projection, onRun, groups, targetConflicts }: TimelineRunsProps & {
+  groups: Occurrence[][];
+  targetConflicts: RunConflicts;
 }) {
-  const { byJob, impactByJob, conflicts } = projection;
+  const { timezone } = workspace;
+  const serviceNames = new Map(workspace.services.map((service) => [service.id, service.name]));
+
+  return (
+    <ol className="vertical-timeline" aria-label="Scheduled runs in time order" role="list">
+      {groups.map((group, groupIndex) => {
+        const previous = groups[groupIndex - 1]?.at(-1);
+        const firstStart = Math.max(group[0].start, window.from);
+        const firstDate = localDate(firstStart, timezone);
+        const showDate = !previous || firstDate !== localDate(Math.max(previous.start, window.from), timezone);
+        return (
+          <li className="vertical-group" key={runKey(group[0])}>
+            {showDate && <time dateTime={firstDate} className="vertical-day">{formatDate(firstStart, timezone)}</time>}
+            {group.length > 1 && <div className="vertical-group-label"><Layers size={14} /> Overlapping runs</div>}
+            <ol className={`vertical-runs ${group.length > 1 ? "overlapping" : ""}`} role="list">
+              {group.map((run, index) => {
+                const key = runKey(run);
+                const visibleStart = Math.max(run.start, window.from);
+                const date = localDate(visibleStart, timezone);
+                const newDate = index > 0 && date !== localDate(Math.max(group[index - 1].start, window.from), timezone);
+                const hits = targetConflicts.get(key);
+                const first = hits?.[0];
+                const state = runState(projection.impactByJob.get(run.job.id)!, hits);
+                const active = now >= run.start && now < run.end;
+                const buffer = run.end > run.scheduledEnd ? formatTimeSpan(run.scheduledEnd, run.end, timezone) : undefined;
+                const expectedNow = active ? now < run.scheduledEnd ? "Expected now" : "Possible overrun" : undefined;
+                const status = state === "planned" || state === "conditional" ? runLabels[state] : undefined;
+
+                return (
+                  <li className={`vertical-entry vertical-${state}`} key={key}>
+                    {newDate && <time dateTime={date} className="vertical-day">{formatDate(visibleStart, timezone)}</time>}
+                    <button className="vertical-run" onClick={() => onRun(run, hits ?? [])}>
+                      <span className="vertical-run-title"><strong>{run.job.name}</strong><ChevronRight size={16} aria-hidden="true" /></span>
+                      <span className="vertical-run-time mono">{formatTimeSpan(run.start, run.scheduledEnd, timezone)}</span>
+                      {(expectedNow || status) && (
+                        <span className="vertical-run-status">{[expectedNow, status].filter(Boolean).join(" · ")}</span>
+                      )}
+                      {buffer && <span className="vertical-run-buffer">Overrun buffer <span className="mono">{buffer}</span></span>}
+                      {first && (
+                        <span className="vertical-run-conflict">
+                          <AlertTriangle size={14} aria-hidden="true" />
+                          <span>
+                            <strong>{first.impacts.map((item) => serviceNames.get(item.serviceId)).join(", ")} {first.conditional ? "at risk" : "expected offline"}</strong>
+                            <span className="mono">{formatTimeSpan(first.from, first.to, timezone)}</span>
+                            {first.paddingOnly && <span>Overrun buffer only</span>}
+                            {hits && hits.length > 1 && <span>+{hits.length - 1} more conflicts</span>}
+                          </span>
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function TimelineChart({ workspace, window, now, projection, onRun, targetConflicts }: TimelineRunsProps & {
+  targetConflicts: RunConflicts;
+}) {
+  const { byJob, impactByJob } = projection;
   const activeJobs = workspace.jobs.filter((job) => (byJob.get(job.id)?.length ?? 0) > 0)
     .sort((a, b) => byJob.get(a.id)![0].start - byJob.get(b.id)![0].start);
   const length = window.to - window.from;
@@ -52,13 +155,6 @@ function TimelineChart({ workspace, window, now, projection, onRun }: {
   const interval = length > 8 * 60 * minute ? 3 : 1;
   const progress = (time: number) => ((time - window.from) / length) * 100;
   const ticks = Array.from({ length: Math.ceil(length / (interval * 60 * minute)) }, (_, index) => window.from + index * interval * 60 * minute);
-  const targetConflicts = new Map<string, Conflict[]>();
-  for (const conflict of conflicts) {
-    const key = runKey(conflict.target);
-    const existing = targetConflicts.get(key) ?? [];
-    existing.push(conflict);
-    targetConflicts.set(key, existing);
-  }
   const nowVisible = now >= window.from && now < window.to;
   const [tip, setTip] = useState<{ top: number; left: number; below: boolean; time: string; buffer?: string }>();
 
@@ -80,11 +176,6 @@ function TimelineChart({ workspace, window, now, projection, onRun }: {
     setTip({ top: below ? rect.bottom + 8 : rect.top - 8, left, below, time, buffer });
   }
 
-  if (!activeJobs.length) {
-    const hasJobs = workspace.jobs.length > 0;
-    return <div className="empty"><CalendarDays size={22} /><strong>{hasJobs ? "No runs in this window" : "No jobs yet"}</strong><span>{hasJobs ? "Pick a different date or time range to see more of your schedule." : "Use New job to add your first scheduled run."}</span></div>;
-  }
-
   return (
     <>
     <div className="chart-scroll" role="region" aria-label="Maintenance timeline chart" tabIndex={0}>
@@ -104,7 +195,6 @@ function TimelineChart({ workspace, window, now, projection, onRun }: {
             return { run, lane };
           });
           const impacts = impactByJob.get(job.id)!;
-          const defaultState = impacts.some((impact) => impact.kind === "planned") ? "planned" : impacts.length ? "conditional" : "scheduled";
           return (
             <div className="chart-row" key={job.id}>
               <span className="chart-label" title={job.name}>{job.name}</span>
@@ -113,7 +203,7 @@ function TimelineChart({ workspace, window, now, projection, onRun }: {
                 {nowVisible && <span aria-hidden="true" className="now-line" style={{ left: `${progress(now)}%` }} />}
                 {bars.map(({ run, lane }) => {
                   const hits = targetConflicts.get(runKey(run));
-                  const state = hits ? "conflict" : defaultState;
+                  const state = runState(impacts, hits);
                   const left = progress(Math.max(run.start, window.from));
                   const width = progress(Math.min(run.end, window.to)) - left;
                   const time = `${formatTime(run.start, workspace.timezone)}–${formatTime(run.scheduledEnd, workspace.timezone)}`;
@@ -121,19 +211,18 @@ function TimelineChart({ workspace, window, now, projection, onRun }: {
                   const bufferLeft = ((bufferFrom - left) / width) * 100;
                   const buffer = run.end > run.scheduledEnd ? `Overrun buffer until ${DateTime.fromMillis(run.end, { zone: workspace.timezone }).toFormat("d LLL, HH:mm ZZZZ")}` : undefined;
                   const fullTime = tooltipTime(run, workspace.timezone);
-                  const spokenState = state === "conflict" ? "Dependency conflict" : state === "conditional" ? "Conditional outage" : state === "planned" ? "Planned outage" : "Scheduled";
                   return (
                     <button
                       key={run.start}
                       className={`run-bar ${state}`}
                       style={{ left: `${left}%`, width: `${width}%`, top: 10 + lane * 30 }}
-                      aria-label={[job.name, fullTime, spokenState, buffer].filter(Boolean).join(", ")}
+                      aria-label={[job.name, fullTime, runLabels[state], buffer].filter(Boolean).join(", ")}
                       onMouseEnter={(event) => showTip(event, fullTime, buffer)}
                       onMouseLeave={() => setTip(undefined)}
                       onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) showTip(event, fullTime, buffer); }}
                       onBlur={() => setTip(undefined)}
                       onKeyDown={(event) => { if (event.key === "Escape") setTip(undefined); }}
-                      onClick={() => { setTip(undefined); onRun(run, [...new Set(hits?.map((hit) => explainConflict(hit, workspace).headline))]); }}
+                      onClick={() => { setTip(undefined); onRun(run, hits ?? []); }}
                     >
                       {bufferLeft < 100 && <i aria-hidden="true" className="bar-buffer" style={{ left: `${bufferLeft}%` }} />}
                       {width * bufferLeft / 100 >= 9.7 && <span className="bar-label" style={{ width: `${bufferLeft}%` }}>{time}</span>}
@@ -146,13 +235,12 @@ function TimelineChart({ workspace, window, now, projection, onRun }: {
         })}
       </div>
     </div>
-    <p className="chart-scroll-hint">Scroll the chart to see more hours.</p>
     {tip && <div aria-hidden="true" className={`time-tooltip ${tip.below ? "below" : ""}`} style={{ left: tip.left, top: tip.top }}><strong>{tip.time}</strong>{tip.buffer && <span>{tip.buffer}</span>}</div>}
     </>
   );
 }
 
-export function Timeline({ workspace, now, onRun }: { workspace: Workspace; now: number; onRun: (run: Occurrence, conflicts: string[]) => void }) {
+export function Timeline({ workspace, now, onRun }: Pick<TimelineRunsProps, "workspace" | "now" | "onRun">) {
   const today = localDate(now, workspace.timezone);
   const [selected, setSelected] = useState<string>();
   const [range, setRange] = useState("day");
@@ -227,7 +315,7 @@ export function Timeline({ workspace, now, onRun }: { workspace: Workspace; now:
           {workspace.jobs.some((job) => job.enabled && (job.padding ?? workspace.padding ?? 0) > 0) && <span><i className="buffer-key" />Overrun buffer</span>}
           {now >= window.from && now < window.to && <span><i className="now-key" />Now</span>}
         </div>
-        <TimelineChart workspace={workspace} window={window} now={now} projection={projection} onRun={onRun} />
+        <TimelineRuns workspace={workspace} window={window} now={now} projection={projection} onRun={onRun} />
       </section>
       <section className="panel conflicts-panel" id="dependency-conflicts" aria-labelledby="conflicts-title">
         <h2 id="conflicts-title">Dependency conflicts</h2>
@@ -236,7 +324,7 @@ export function Timeline({ workspace, now, onRun }: { workspace: Workspace; now:
             {projection.conflicts.slice(0, shown).map((item) => {
               const { headline, paths } = explainConflict(item, workspace);
               return (
-                <button key={`${runKey(item.source)}:${runKey(item.target)}`} className="conflict-row" onClick={() => onRun(item.target, [headline])}>
+                <button key={`${runKey(item.source)}:${runKey(item.target)}`} className="conflict-row" onClick={() => onRun(item.target, [item])}>
                   <AlertTriangle size={20} />
                   <span className="conflict-copy"><strong>{headline}</strong>{paths.map((path) => <span className="mono" key={path}>{path}</span>)}{item.paddingOnly && <span>Overlap only within an overrun buffer</span>}</span>
                   <span className="conflict-time mono"><Timer size={14} /> {formatTime(item.from, workspace.timezone)}–{formatTime(item.to, workspace.timezone)}</span>

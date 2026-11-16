@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-export const serviceTypes = ["Network", "Storage", "Compute", "Power", "Service"] as const;
+export const suggestedServiceTypes = ["Application", "Database", "Device", "External service", "Network", "Storage"] as const;
+export const maxServiceTypeLength = 60;
 export const outcomes = ["Succeeded", "Failed", "Skipped"] as const;
 export const maxDuration = 1440;
 export const minute = 60_000;
@@ -11,7 +12,7 @@ const links = z.array(id).max(200).transform((items) => [...new Set(items)]);
 
 const serviceFields = z.object({
   name,
-  kind: z.enum(serviceTypes),
+  kind: z.string().trim().max(maxServiceTypeLength).transform((type) => type || "Service"),
   dependsOn: links,
 });
 

@@ -4,26 +4,27 @@ Wen is a self-hosted scheduler for home labs. It projects when your scheduled jo
 
 ## Run with Docker Compose
 
-Build and start from this checkout.
+Start the published image, `ghcr.io/doomedramen/wen:latest`, with `compose.yaml`. Sign in to GHCR first if the package is private.
 
 ```sh
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 Open <http://localhost:3000>. The app has no authentication and is intended for a trusted LAN. The `wen-data` volume stores jobs, services, schedule settings, and run logs. Keep one app instance per volume and back up the volume to preserve your workspace.
 
-For a registry deployment, copy `compose.yaml` and set `WEN_IMAGE=ghcr.io/<owner>/<repository>:latest` in a `.env` file. Sign in to GHCR first if the package is private, then run:
+To test a build from your checkout, set `WEN_IMAGE` to its local tag.
 
 ```sh
-docker compose pull
-docker compose up -d --no-build
+docker build -t wen:local .
+WEN_IMAGE=wen:local docker compose up -d --pull never
 ```
 
 Set `WEN_PORT` to change the host port. New workspaces start empty and use `WEN_TIMEZONE`, which defaults to `Europe/London`.
 
 ## Track maintenance
 
-1. Add your devices and services under **Services**. On Internet access, select UDM Pro under **Depends on**.
+1. Add your devices and services under **Services**. Pick a suggested type or enter your own. On Internet access, select UDM Pro under **Depends on**.
 2. Add a job with **New job**. Pick Daily, selected weekdays, or enter five-field cron in the workspace timezone. Set the expected duration, choose required services, and mark each service the job could take offline as Planned or Conditional.
 3. Check the **Timeline** for overlapping windows. A conflict identifies the affected job, the shared time, and the dependency path. **Expected now** updates as the clock advances and shows projected status from the schedule.
 4. Select the timezone in the navigation to open **Schedule settings** and set a default overrun buffer. Leave a job's buffer blank to inherit it or enter a number to override it. Zero disables buffering for that job. The extra time appears as a striped tail. A conflict that depends on a buffer is reported as possible.
@@ -36,10 +37,11 @@ For example, schedule UniFi at 23:00 with a conditional outage for UDM Pro. If I
 ```sh
 npm ci
 npm run dev
-npm test
-npm run build
+npm run verify
 ```
 
 Local development saves the workspace to `data/workspace.json`. Use `WEN_DATA_DIR` to select another location.
 
-A push to GitHub's `main` branch, including a merge, runs the [container workflow](.github/workflows/publish.yml). The build runs the scheduling tests and produces Linux AMD64 and ARM64 images. It publishes the `latest` and full commit SHA tags to GHCR using the repository's Actions token.
+Lefthook installs the Git hooks through `npm ci`. Run `npx lefthook install` if your npm settings skip lifecycle scripts. Pre-commit checks staged whitespace and TypeScript. Pre-push runs the test suite and production build via `npm run verify`.
+
+The [GitHub workflow](.github/workflows/publish.yml) runs `npm run verify` on pull requests and pushes to `main`. After CI passes on `main`, a separate job builds and publishes Linux AMD64 and ARM64 images with the `latest` and full commit SHA tags.

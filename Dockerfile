@@ -2,9 +2,9 @@ FROM node:24-bookworm-slim AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN CI=true LEFTHOOK=0 npm ci
 COPY . .
-RUN npm test && npm run build
+RUN npm run build
 
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
