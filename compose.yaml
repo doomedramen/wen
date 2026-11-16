@@ -1,0 +1,15 @@
+services:
+  wen:
+    image: ${WEN_IMAGE:-wen:local}
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "${WEN_PORT:-3000}:3000"
+    environment:
+      WEN_TIMEZONE: ${WEN_TIMEZONE:-Europe/London}
+    volumes:
+      - wen-data:/app/data
+
+volumes:
+  wen-data:
